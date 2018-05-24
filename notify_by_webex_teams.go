@@ -21,14 +21,12 @@
 // doc links:
 //			https://developer.webex.com/getting-started.html
 //
-<<<<<<< HEAD
 // changelog:
 //              V0.1 (16.05.2018): 	initial release
 //              V0.2 (20.05.2018): 	now files (HTTP link) can be send via flag -a
 //		V0.3 (25.05.2018): 	complete redesign without 3rd party library (github.com/vallard/spark/) 
 //					and new file upload function added via flag -f
-=======
->>>>>>> e01abdbf65d5cbb954f024960d9472a83c269166
+//
 package main
 
 import (
@@ -86,11 +84,7 @@ var (
 const (
 	roomsURL    = "https://api.ciscospark.com/v1/rooms"
 	messagesURL = "https://api.ciscospark.com/v1/messages"
-<<<<<<< HEAD
 	version     = "0.3"
-=======
-	version     = "0.2"
->>>>>>> e01abdbf65d5cbb954f024960d9472a83c269166
 )
 
 func init() {
