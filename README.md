@@ -12,15 +12,15 @@ required args
 			-r <room name>
 			-m <markdown message>
 
- optinal args
- ------------
+optional args
+-------------
 			-p <proxy server>
 			-f <filename and path to send>
 
- example
- -------
+example
+-------
 			notify_by_webex_teams.exe -T <apitoken> -t "KMP-Team" -r "My New Room" -m "Happy hacking" -f logo.png
 
- doc links
- ---------
+doc links
+---------
 			https:developer.webex.com/getting-started.html
