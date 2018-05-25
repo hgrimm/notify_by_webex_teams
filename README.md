@@ -7,11 +7,12 @@ by Herwig Grimm (herwig.grimm at aon.at)
 
 required args
 -------------
- -T <Webex Teams API token>
- -t <team name>
- -r <room name>
- -m <markdown message>
-
+```
+-T <Webex Teams API token>
+-t <team name>
+-r <room name>
+-m <markdown message>
+```
 optional args
 -------------
 			-p <proxy server>
