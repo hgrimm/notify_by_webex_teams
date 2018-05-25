@@ -29,6 +29,6 @@ notify_by_webex_teams.exe -T <apitoken> -t "KMP-Team" -r "My New Room" -m "Happy
 
 doc links
 ---------
-```
-https:developer.webex.com/getting-started.html
-```
+
+[Cisco Webex Developer Docs](https://developer.webex.com/getting-started.html)
+
