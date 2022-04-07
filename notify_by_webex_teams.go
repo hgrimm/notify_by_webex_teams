@@ -1,7 +1,7 @@
 // notify_by_webex_teams.go
 //
-// CLI command for sending messages to Cisco Webex Teams rooms.
-// Send messages and files to Webex Teams. If *room name* is not found a new room is created.
+// CLI command for sending messages to Cisco Webex rooms.
+// Send messages and files to Webex. If *room name* is not found a new room is created.
 // Supports on file upload per request.
 // by Herwig Grimm (herwig.grimm at aon.at)
 //
@@ -9,24 +9,24 @@
 //			-T <Webex bot token>
 //			-t <team name>
 //			-r <room name>
-//			-m <markdown message>
+//			-m <markdown message> | -i
 //
 // optinal args:
 //			-p <proxy server>
 //			-f <png filename and path to send>
 //			-d <message_id>
 //			-a <card_attachment>
-//			-i ... use standard in
+//			-i ... use standard input instead of flag -m
 //
 // example:
-//			upload_poc.exe -T <apitoken> -t "KMP-Test-Team" -r "INM18/00021" -m "Happy hacking" -f upload_poc.go
+//			upload_poc.exe -T <apitoken> -t "Test-Team" -r "INM18/00021" -m "Happy hacking" -f upload_poc.go
 //
 // doc links:
 //			https://developer.webex.com/getting-started.html
 //
 // changelog:
-//              V0.1 (16.05.2018): 	initial release
-//              V0.2 (20.05.2018): 	now files (HTTP link) can be send via flag -a
+//				V0.1 (16.05.2018): 	initial release
+//				V0.2 (20.05.2018): 	now files (HTTP link) can be send via flag -a
 //				V0.3 (25.05.2018): 	complete redesign without 3rd party library (github.com/vallard/spark/)
 //					and new file upload function added via flag -f
 //				V0.4 (24.11.2019): 	new message delete function via flag -d
@@ -34,7 +34,8 @@
 //				V0.5 (07.04.2022): new flag -i for reading messages from standard input and new flag description for flag -T
 //
 // card attachment example:
-// 				./notify_by_webex_teams -T "<token>" -t "KMP-Test-Team" -r "Allgemein" -m "Test GRH 010" -a '{ "contentType": "application/vnd.microsoft.card.adaptive", "content": { "type": "AdaptiveCard", "version": "1.0", "body": [ { "type": "TextBlock", "text": "Please enter your comment here: " }, { "type": "Input.Text", "id": "name", "title": "New Input.Toggle", "placeholder": "comment text" } ], "actions": [ { "type": "Action.Submit", "title": "accept", "data": { "answer": "accept " } }, { "type": "Action.Submit", "title": "decline", "data": { "answer": "decline " } } ] } }'
+//				./notify_by_webex_teams -T "<token>" -t "KMP-Test-Team" -r "Allgemein" -m "Test GRH 010" \
+//				-a '{ "contentType": "application/vnd.microsoft.card.adaptive", "content": { "type": "AdaptiveCard", "version": "1.0", "body": [ { "type": "TextBlock", "text": "Please enter your comment here: " }, { "type": "Input.Text", "id": "name", "title": "New Input.Toggle", "placeholder": "comment text" } ], "actions": [ { "type": "Action.Submit", "title": "accept", "data": { "answer": "accept " } }, { "type": "Action.Submit", "title": "decline", "data": { "answer": "decline " } } ] } }'
 package main
 
 import (
@@ -116,7 +117,7 @@ const (
 
 func init() {
 	flag.StringVar(&apiToken, "T", "", "Webex bot token (bot must be member of team and room)")
-	flag.StringVar(&teamName, "t", "KMP-Developer-Team", "team name")
+	flag.StringVar(&teamName, "t", "Developer-Team", "team name")
 	flag.StringVar(&roomName, "r", "Room1", "room name")
 	flag.StringVar(&uploadFile, "f", "", "PNG filename and path to send")
 	flag.StringVar(&markdownMsg, "m", "", "markdown message")
@@ -455,10 +456,6 @@ func deleteMessage(messageID string) error {
 	return nil
 }
 
-func isWindows() bool {
-	return os.PathSeparator == '\\' && os.PathListSeparator == ';'
-}
-
 func main() {
 	flag.Parse()
 
@@ -467,8 +464,6 @@ func main() {
 		lineSeparator = byte('\r')
 	}
 
-
-	
 	if useStdIn {
 		reader := bufio.NewReader(os.Stdin)
 		for {
