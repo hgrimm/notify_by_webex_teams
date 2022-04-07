@@ -6,14 +6,17 @@
 // by Herwig Grimm (herwig.grimm at aon.at)
 //
 // required args:
-//			-T <Webex Teams API token>
+//			-T <Webex bot token>
 //			-t <team name>
 //			-r <room name>
 //			-m <markdown message>
 //
 // optinal args:
 //			-p <proxy server>
-//			-f <filename and path to send>
+//			-f <png filename and path to send>
+//			-d <message_id>
+//			-a <card_attachment>
+//			-i ... use standard in
 //
 // example:
 //			upload_poc.exe -T <apitoken> -t "KMP-Test-Team" -r "INM18/00021" -m "Happy hacking" -f upload_poc.go
@@ -24,12 +27,18 @@
 // changelog:
 //              V0.1 (16.05.2018): 	initial release
 //              V0.2 (20.05.2018): 	now files (HTTP link) can be send via flag -a
-//		V0.3 (25.05.2018): 	complete redesign without 3rd party library (github.com/vallard/spark/) 
+//				V0.3 (25.05.2018): 	complete redesign without 3rd party library (github.com/vallard/spark/)
 //					and new file upload function added via flag -f
+//				V0.4 (24.11.2019): 	new message delete function via flag -d
+//					and card attachment via flag -a. see also https://developer.webex.com/docs/api/guides/cards and https://adaptivecards.io/designer/
+//				V0.5 (07.04.2022): new flag -i for reading messages from standard input and new flag description for flag -T
 //
+// card attachment example:
+// 				./notify_by_webex_teams -T "<token>" -t "KMP-Test-Team" -r "Allgemein" -m "Test GRH 010" -a '{ "contentType": "application/vnd.microsoft.card.adaptive", "content": { "type": "AdaptiveCard", "version": "1.0", "body": [ { "type": "TextBlock", "text": "Please enter your comment here: " }, { "type": "Input.Text", "id": "name", "title": "New Input.Toggle", "placeholder": "comment text" } ], "actions": [ { "type": "Action.Submit", "title": "accept", "data": { "answer": "accept " } }, { "type": "Action.Submit", "title": "decline", "data": { "answer": "decline " } } ] } }'
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -40,10 +49,12 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -71,29 +82,87 @@ type SparkRoom struct {
 	TeamId       string
 }
 
+type Message struct {
+	ID          string    `json:"id"`
+	RoomID      string    `json:"roomId"`
+	RoomType    string    `json:"roomType"`
+	Text        string    `json:"text"`
+	Files       []string  `json:"files"`
+	PersonID    string    `json:"personId"`
+	PersonEmail string    `json:"personEmail"`
+	Markdown    string    `json:"markdown"`
+	HTML        string    `json:"html"`
+	Created     time.Time `json:"created"`
+}
+
 var (
-	uploadFile  string
-	proxyString string
-	markdownMsg string
-	apiToken    string
-	teamName    string
-	roomName    string
-	showVersion bool
+	uploadFile      string
+	proxyString     string
+	markdownMsg     string
+	apiToken        string
+	teamName        string
+	roomName        string
+	showVersion     bool
+	deleteMessageId string
+	cardAttachment  string
+	useStdIn        bool
 )
 
 const (
 	roomsURL    = "https://api.ciscospark.com/v1/rooms"
 	messagesURL = "https://api.ciscospark.com/v1/messages"
-	version     = "0.3"
+	version     = "0.5"
 )
 
 func init() {
-	flag.StringVar(&apiToken, "T", "", "Webex Teams API token")
+	flag.StringVar(&apiToken, "T", "", "Webex bot token (bot must be member of team and room)")
 	flag.StringVar(&teamName, "t", "KMP-Developer-Team", "team name")
 	flag.StringVar(&roomName, "r", "Room1", "room name")
-	flag.StringVar(&uploadFile, "f", "", "filename and path to send")
+	flag.StringVar(&uploadFile, "f", "", "PNG filename and path to send")
 	flag.StringVar(&markdownMsg, "m", "", "markdown message")
 	flag.StringVar(&proxyString, "p", "", "proxy server. format: http://<user>:<password>@<hostname>:<port>")
+	flag.StringVar(&deleteMessageId, "d", "", "delete message. provide message id")
+	flag.StringVar(&cardAttachment, "a", "", "card attachment -a see https://developer.webex.com/docs/api/guides/cards and https://adaptivecards.io/designer/")
+	flag.BoolVar(&showVersion, "V", false, "show version")
+	flag.BoolVar(&useStdIn, "i", false, "read message from standard input")
+}
+
+func createMessageAndAttachmentsToRoom(markdownMsg, roomID, attachment string) (string, error) {
+
+	b := new(bytes.Buffer)
+	b.WriteString(`{"roomId": "`)
+	b.WriteString(roomID)
+	b.WriteString(`", `)
+	b.WriteString(`"markdown": "`)
+	b.WriteString(markdownMsg)
+	b.WriteString(`", `)
+	b.WriteString(`"attachments": [`)
+	b.WriteString(attachment)
+	b.WriteString(`]`)
+	b.WriteString(`}`)
+
+	log.Printf("postData: %s\n", b.String())
+
+	resp, err := webexTeamsRequest(apiToken, proxyString, "POST", messagesURL, nil, b)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("createMessageAndAttachmentsToRoom() HTTP status code: %d", resp.StatusCode)
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+
+	var m Message
+	err = json.Unmarshal(body, &m)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("createMessageAndAttachmentsToRoom() message ID: %s", m.ID)
+	log.Printf("createMessageAndAttachmentsToRoom() message created: %s", m.Created)
+	// log.Printf("createMessageToRoom body: %s\n", body)
+	return "", err
 }
 
 func createMessageAndUploadToRoom(markdownMsg, roomID, uploadFile string) (string, error) {
@@ -106,6 +175,7 @@ func createMessageAndUploadToRoom(markdownMsg, roomID, uploadFile string) (strin
 
 	log.Printf("file to upload: %s\n", uploadFile)
 	request, err := newfileUploadRequest(messagesURL, extraParams, "files", uploadFile)
+	// log.Printf("newfileUploadRequest: %+v\n", request)
 	if err != nil {
 		return "", err
 	}
@@ -125,48 +195,76 @@ func createMessageAndUploadToRoom(markdownMsg, roomID, uploadFile string) (strin
 
 	authBearer := fmt.Sprintf("Bearer %s", apiToken)
 	request.Header.Add("Authorization", authBearer)
+
+	log.Printf("request.ContentLength %d\n", request.ContentLength)
 	// fmt.Printf("request.Header: %#v\n", request.Header)
 	resp, err := client.Do(request)
 	if err != nil {
+		log.Printf("request error\n")
 		log.Fatal(err)
 	} else {
-		body := &bytes.Buffer{}
-		_, err := body.ReadFrom(resp.Body)
+		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Fatal(err)
 		}
 		resp.Body.Close()
 		log.Printf("createMessageAndUploadToRoom() HTTP status code: %d", resp.StatusCode)
+
+		var m Message
+		err = json.Unmarshal(body, &m)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("createMessageAndUploadToRoom() message ID: %s", m.ID)
+		log.Printf("createMessageAndUploadToRoom() message created: %s", m.Created)
 	}
 	return "", err
 }
 
-// Creates a new file upload http request with optional extra params
-func newfileUploadRequest(uri string, params map[string]string, paramName, path string) (*http.Request, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+func createPngFormFile(w *multipart.Writer, fieldname, filename string) (io.Writer, error) {
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldname, filename))
+	h.Set("Content-Type", "image/png;")
+	return w.CreatePart(h)
+}
 
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile(paramName, filepath.Base(path))
+// Creates a new file upload http request with optional extra params
+func newfileUploadRequest(uri string, params map[string]string, fieldname, uploadFile string) (*http.Request, error) {
+	buf := new(bytes.Buffer)
+	w := multipart.NewWriter(buf)
+
+	fw, err := createPngFormFile(w, fieldname, uploadFile)
 	if err != nil {
-		return nil, err
+		log.Println(err)
 	}
-	_, err = io.Copy(part, file)
+	fd, err := os.Open(uploadFile)
+	if err != nil {
+		log.Println(err)
+	}
+	defer fd.Close()
+
+	_, err = io.Copy(fw, fd)
+	if err != nil {
+		log.Println(err)
+	}
 
 	for key, val := range params {
-		_ = writer.WriteField(key, val)
-	}
-	err = writer.Close()
-	if err != nil {
-		return nil, err
+		err = w.WriteField(key, val)
+		if err != nil {
+			log.Println(err)
+		}
 	}
 
-	req, err := http.NewRequest("POST", uri, body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	// Important if you do not close the multipart writer you will not have a
+	// terminating boundry
+	w.Close()
+
+	req, err := http.NewRequest("POST", uri, buf)
+	if err != nil {
+		log.Println(err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
 	return req, err
 }
 
@@ -182,6 +280,7 @@ func webexTeamsRequest(apiToken string,
 	authBearer := fmt.Sprintf("Bearer %s", apiToken)
 
 	uriAndValues := fmt.Sprintf("%s?%s", baseURL, values.Encode())
+	log.Printf("webexTeamsRequest() uriAndValues: %s\n", uriAndValues)
 	req, err := http.NewRequest(method, uriAndValues, buf)
 
 	client := &http.Client{}
@@ -211,6 +310,7 @@ func getTeamIDByName(name string) (string, error) {
 	queryValues := url.Values{}
 	queryValues.Add("type", "group")
 
+	log.Printf("roomsURL: %s", roomsURL)
 	resp, err := webexTeamsRequest(apiToken, proxyString, "GET", roomsURL, queryValues, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -309,8 +409,10 @@ func createMessageToRoom(messageText, roomID string) (string, error) {
 	type NewSparkMessage struct {
 		RoomID   string `json:"roomId"`
 		Markdown string `json:"markdown"`
+		// Files    []string `json:"files"`
 	}
 
+	// newMessage := &NewSparkMessage{RoomID: roomID, Markdown: messageText, Files: []string{"https://www.kapsch.net/KapschInternet/media/CarrierCom/PressCorner/Kapsch_Claim_White-Yellow_RGB.png"}}
 	newMessage := &NewSparkMessage{RoomID: roomID, Markdown: messageText}
 
 	b := new(bytes.Buffer)
@@ -325,15 +427,71 @@ func createMessageToRoom(messageText, roomID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	log.Printf("createMessageToRoom body: %s\n", body)
+	resp.Body.Close()
+	log.Printf("createMessageAndUploadToRoom() HTTP status code: %d", resp.StatusCode)
+
+	var m Message
+	err = json.Unmarshal(body, &m)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("createMessageToRoom() message ID: %s", m.ID)
+	log.Printf("createMessageToRoom() message created: %s", m.Created)
+	// log.Printf("createMessageToRoom body: %s\n", body)
 	return "", err
+}
+
+func deleteMessage(messageID string) error {
+	url := fmt.Sprintf("%s/%s", messagesURL, messageID)
+	resp, err := webexTeamsRequest(apiToken, proxyString, "DELETE", url, nil, nil)
+	if err != nil {
+		return err
+	}
+	log.Printf("deleteMessage() HTTP status code: %d", resp.StatusCode)
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func isWindows() bool {
+	return os.PathSeparator == '\\' && os.PathListSeparator == ';'
 }
 
 func main() {
 	flag.Parse()
 
+	lineSeparator := byte('\n')
+	if runtime.GOOS == "darwin" {
+		lineSeparator = byte('\r')
+	}
+
+
+	
+	if useStdIn {
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			line, err := reader.ReadString(lineSeparator)
+			line = strings.TrimSuffix(line, "\r")
+			line = strings.TrimSuffix(line, "\r\n")
+			markdownMsg += line + "\n"
+			if err == io.EOF {
+				break
+			}
+		}
+	}
+
 	if showVersion {
 		fmt.Printf("%s version: %s\n", path.Base(os.Args[0]), version)
+		os.Exit(0)
+	}
+
+	if len(deleteMessageId) > 0 {
+		err := deleteMessage(deleteMessageId)
+		if err != nil {
+			log.Fatal(err)
+		}
 		os.Exit(0)
 	}
 
@@ -348,6 +506,14 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("roomID: %s\n", roomID)
+
+	if len(cardAttachment) > 0 {
+		_, err := createMessageAndAttachmentsToRoom(markdownMsg, roomID, cardAttachment)
+		if err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}
 
 	if len(uploadFile) > 0 {
 		_, err = createMessageAndUploadToRoom(markdownMsg, roomID, uploadFile)
