@@ -7,7 +7,7 @@
 //
 // required args:
 //			-T <Webex bot token>
-//			-t <team name>
+//			-t <team name> | -D <email address>
 //			-r <room name>
 //			-m <markdown message> | -i
 //
@@ -32,6 +32,7 @@
 //				V0.4 (24.11.2019): 	new message delete function via flag -d
 //					and card attachment via flag -a. see also https://developer.webex.com/docs/api/guides/cards and https://adaptivecards.io/designer/
 //				V0.5 (07.04.2022): new flag -i for reading messages from standard input and new flag description for flag -T
+//				V0.6 (08.04.2022): new flag -D for sending a private 1:1 message by specified email address
 //
 // card attachment example:
 //				./notify_by_webex_teams -T "<token>" -t "KMP-Test-Team" -r "Allgemein" -m "Test GRH 010" \
@@ -107,12 +108,13 @@ var (
 	deleteMessageId string
 	cardAttachment  string
 	useStdIn        bool
+	emailAddr       string
 )
 
 const (
 	roomsURL    = "https://api.ciscospark.com/v1/rooms"
 	messagesURL = "https://api.ciscospark.com/v1/messages"
-	version     = "0.5"
+	version     = "0.6"
 )
 
 func init() {
@@ -126,23 +128,29 @@ func init() {
 	flag.StringVar(&cardAttachment, "a", "", "card attachment -a see https://developer.webex.com/docs/api/guides/cards and https://adaptivecards.io/designer/")
 	flag.BoolVar(&showVersion, "V", false, "show version")
 	flag.BoolVar(&useStdIn, "i", false, "read message from standard input")
+	flag.StringVar(&emailAddr, "D", "", "The email address of the recipient when sending a private 1:1 message.")
 }
 
 func createMessageAndAttachmentsToRoom(markdownMsg, roomID, attachment string) (string, error) {
 
 	b := new(bytes.Buffer)
-	b.WriteString(`{"roomId": "`)
-	b.WriteString(roomID)
-	b.WriteString(`", `)
-	b.WriteString(`"markdown": "`)
-	b.WriteString(markdownMsg)
-	b.WriteString(`", `)
-	b.WriteString(`"attachments": [`)
-	b.WriteString(attachment)
-	b.WriteString(`]`)
-	b.WriteString(`}`)
+	/*
+		b.WriteString(`{"roomId": "`)
+		b.WriteString(roomID)
+		b.WriteString(`", `)
+		b.WriteString(`"markdown": "`)
+		b.WriteString(markdownMsg)
+		b.WriteString(`", `)
+		b.WriteString(`"attachments": [`)
+		b.WriteString(attachment)
+		b.WriteString(`]`)
+		b.WriteString(`}`)
 
-	log.Printf("postData: %s\n", b.String())
+		log.Printf("postData: %s\n", b.String())
+	*/
+	postDataStr := fmt.Sprintf("{ \"roomId\": \"%s\", \"markdown\": \"%s\", \"attachments\": [ %s ]}", roomID, markdownMsg, attachment)
+	log.Printf("postDataStr: %s\n", postDataStr)
+	b.WriteString(postDataStr)
 
 	resp, err := webexTeamsRequest(apiToken, proxyString, "POST", messagesURL, nil, b)
 	if err != nil {
@@ -405,15 +413,48 @@ func createRoom(roomTitle, teamID string) (string, error) {
 	return nr.Id, err
 }
 
+func createMessageDirect(messageText, toPersonEmail string) (string, error) {
+
+	type NewSparkMessage struct {
+		ToPersonEmail string `json:"toPersonEmail"`
+		Markdown      string `json:"markdown"`
+	}
+
+	newMessage := &NewSparkMessage{ToPersonEmail: toPersonEmail, Markdown: messageText}
+
+	b := new(bytes.Buffer)
+	json.NewEncoder(b).Encode(newMessage)
+
+	resp, err := webexTeamsRequest(apiToken, proxyString, "POST", messagesURL, nil, b)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("createMessageDirect() HTTP status code: %d", resp.StatusCode)
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	log.Printf("createMessageDirect() HTTP status code: %d", resp.StatusCode)
+
+	var m Message
+	err = json.Unmarshal(body, &m)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("createMessageDirect() message ID: %s", m.ID)
+	log.Printf("createMessageDirect() message Created: %s", m.Created)
+	log.Printf("createMessageDirect() message RoomID: %s", m.RoomID)
+	return m.RoomID, nil
+}
+
 func createMessageToRoom(messageText, roomID string) (string, error) {
 
 	type NewSparkMessage struct {
 		RoomID   string `json:"roomId"`
 		Markdown string `json:"markdown"`
-		// Files    []string `json:"files"`
 	}
 
-	// newMessage := &NewSparkMessage{RoomID: roomID, Markdown: messageText, Files: []string{"https://www.kapsch.net/KapschInternet/media/CarrierCom/PressCorner/Kapsch_Claim_White-Yellow_RGB.png"}}
 	newMessage := &NewSparkMessage{RoomID: roomID, Markdown: messageText}
 
 	b := new(bytes.Buffer)
@@ -429,7 +470,7 @@ func createMessageToRoom(messageText, roomID string) (string, error) {
 		return "", err
 	}
 	resp.Body.Close()
-	log.Printf("createMessageAndUploadToRoom() HTTP status code: %d", resp.StatusCode)
+	log.Printf("createMessageToRoom() HTTP status code: %d", resp.StatusCode)
 
 	var m Message
 	err = json.Unmarshal(body, &m)
@@ -477,6 +518,10 @@ func main() {
 		}
 	}
 
+	if len(markdownMsg) == 0 {
+		fmt.Println("no message. use flag -m or flag -i")
+	}
+
 	if showVersion {
 		fmt.Printf("%s version: %s\n", path.Base(os.Args[0]), version)
 		os.Exit(0)
@@ -490,15 +535,25 @@ func main() {
 		os.Exit(0)
 	}
 
-	teamID, err := getTeamIDByName(teamName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("teamID: %s\n", teamID)
+	var roomID string
+	// sending a private 1:1 message if emailAddr is set
+	if len(emailAddr) > 0 {
+		var err error
+		roomID, err = createMessageDirect(markdownMsg, emailAddr)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		teamID, err := getTeamIDByName(teamName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("teamID: %s\n", teamID)
 
-	roomID, err := createRoomAndGetRoom(teamID, roomName)
-	if err != nil {
-		log.Fatal(err)
+		roomID, err = createRoomAndGetRoom(teamID, roomName)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	log.Printf("roomID: %s\n", roomID)
 
@@ -511,13 +566,13 @@ func main() {
 	}
 
 	if len(uploadFile) > 0 {
-		_, err = createMessageAndUploadToRoom(markdownMsg, roomID, uploadFile)
+		_, err := createMessageAndUploadToRoom(markdownMsg, roomID, uploadFile)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 	} else {
-		_, err = createMessageToRoom(markdownMsg, roomID)
+		_, err := createMessageToRoom(markdownMsg, roomID)
 		if err != nil {
 			log.Fatal(err)
 		}
