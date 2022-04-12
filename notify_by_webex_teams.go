@@ -119,7 +119,7 @@ const (
 
 func init() {
 	flag.StringVar(&apiToken, "T", "", "Webex bot token (bot must be member of team and room)")
-	flag.StringVar(&teamName, "t", "Developer-Team", "team name")
+	flag.StringVar(&teamName, "t", "", "team name")
 	flag.StringVar(&roomName, "r", "Room1", "room name")
 	flag.StringVar(&uploadFile, "f", "", "PNG filename and path to send")
 	flag.StringVar(&markdownMsg, "m", "", "markdown message")
@@ -543,7 +543,9 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-	} else {
+	}
+
+	if len(teamName) > 0 {
 		teamID, err := getTeamIDByName(teamName)
 		if err != nil {
 			log.Fatal(err)
@@ -555,6 +557,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+
 	log.Printf("roomID: %s\n", roomID)
 
 	if len(cardAttachment) > 0 {
